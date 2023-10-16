@@ -33,7 +33,7 @@
 
 #include "driver.h"
 #include "errmsg.h"
-
+#include <algorithm>
 
 /* {{{ my_l_to_a() -I- */
 static char * my_l_to_a(char * buf, size_t buf_size, long long a)
@@ -48,15 +48,6 @@ static char * my_l_to_a(char * buf, size_t buf_size, long long a)
 static char * my_ul_to_a(char * buf, size_t buf_size, unsigned long long a)
 {
   myodbc_snprintf(buf, buf_size, "%llu", (unsigned long long) a);
-  return buf;
-}
-/* }}} */
-
-
-/* {{{ my_f_to_a() -I- */
-static char * my_f_to_a(char * buf, size_t buf_size, double a)
-{
-  myodbc_snprintf(buf, buf_size, "%.17e", a);
   return buf;
 }
 /* }}} */
@@ -98,7 +89,7 @@ BOOL ssps_get_out_params(STMT *stmt)
   if (is_call_procedure(&stmt->query))
   {
     MYSQL_ROW values= NULL;
-    DESCREC   *iprec, *aprec, *irrec;
+    DESCREC   *iprec, *aprec;
     uint      counter= 0;
     int       i, out_params;
 
@@ -113,7 +104,7 @@ BOOL ssps_get_out_params(STMT *stmt)
       {
         values = stmt->fetch_row();
       }
-      catch(MYERROR &e)
+      catch(MYERROR&)
       {
         return FALSE;
       }
@@ -201,8 +192,8 @@ BOOL ssps_get_out_params(STMT *stmt)
                                            stmt->apd->bind_type,
                                            sizeof(SQLLEN), 0);
 
-              default_size= bind_length(aprec->concise_type,
-                                        aprec->octet_length);
+              default_size = bind_length(aprec->concise_type,
+                                        (ulong)aprec->octet_length);
               target= (char*)ptr_offset_adjust(aprec->data_ptr, stmt->apd->bind_offset_ptr,
                                     stmt->apd->bind_type, default_size, 0);
 
@@ -312,10 +303,10 @@ void free_result_bind(STMT *stmt)
 {
   if (stmt->result_bind != NULL)
   {
-    int i, field_cnt = stmt->field_count();
+    auto field_cnt = stmt->field_count();
 
     /* buffer was allocated for each column */
-    for (i= 0; i < field_cnt; i++)
+    for (size_t i = 0; i < field_cnt; i++)
     {
       x_free(stmt->result_bind[i].buffer);
 
@@ -327,9 +318,7 @@ void free_result_bind(STMT *stmt)
 
     x_free(stmt->result_bind);
     stmt->result_bind= 0;
-
-    x_free(stmt->array);
-    stmt->array= 0;
+    stmt->array.reset();
   }
 }
 
@@ -551,7 +540,7 @@ allocate_buffer_for_field(const MYSQL_FIELD * const field, BOOL outparams)
 
 static MYSQL_ROW fetch_varlength_columns(STMT *stmt, MYSQL_ROW values)
 {
-  const unsigned int  num_fields = stmt->field_count();
+  const size_t num_fields = stmt->field_count();
   unsigned int i;
   uint desc_index= ~0L, stream_column= ~0L;
 
@@ -580,8 +569,8 @@ static MYSQL_ROW fetch_varlength_columns(STMT *stmt, MYSQL_ROW values)
           stmt->result_bind[i].buffer_length < *stmt->result_bind[i].length)
       {
         /* TODO Realloc error proc */
-        stmt->array[i]= (char*)myodbc_realloc(stmt->array[i], *stmt->result_bind[i].length,
-          MYF(MY_ALLOW_ZERO_PTR));
+        stmt->array[i]= (char*)myodbc_realloc(stmt->array[i],
+          *stmt->result_bind[i].length);
 
         stmt->lengths[i]= *stmt->result_bind[i].length;
         stmt->result_bind[i].buffer_length = *stmt->result_bind[i].length;
@@ -665,7 +654,7 @@ void STMT::reset()
 
   // If data existed before invalidating the result array does not need freeing
   if (m_row_storage.invalidate())
-    result_array = nullptr;
+    result_array.reset();
 }
 
 void STMT::free_reset_out_params()
@@ -679,7 +668,7 @@ void STMT::free_reset_out_params()
   apd->free_paramdata();
   /* reset data-at-exec state */
   dae_type = 0;
-  scroller_reset(this);
+  scroller.reset();
 }
 
 void STMT::free_reset_params()
@@ -702,7 +691,6 @@ void STMT::free_fake_result(bool clear_all_results)
     {
       /* We seiously CLOSEing statement for preparing handle object for
          new query */
-      alloc_root.Clear();
       while (!next_result(this))
       {
         get_result_metadata(this, TRUE);
@@ -725,6 +713,17 @@ void STMT::free_fake_result(bool clear_all_results)
 
 }
 
+
+// Clear and free buffers bound in query_attr_bind
+void STMT::clear_query_attr_bind()
+{
+  for (auto bind : query_attr_bind) {
+    x_free(bind.buffer);
+  }
+  query_attr_bind.clear();
+}
+
+
 STMT::~STMT()
 {
   // Create a local mutex in the destructor.
@@ -739,11 +738,15 @@ STMT::~STMT()
   }
 
   reset_setpos_apd();
-  delete_parsed_query(&query);
-  delete_parsed_query(&orig_query);
 
   LOCK_DBC(dbc);
   dbc->stmt_list.remove(this);
+  clear_query_attr_bind();
+  for (auto bind : param_bind) {
+    if (bind.buffer != nullptr)
+      x_free(bind.buffer);
+  }
+
 }
 
 void STMT::reset_getdata_position()
@@ -799,7 +802,7 @@ long STMT::compute_cur_row(unsigned fFetchType, SQLLEN irow)
     cur_row = 0L;
     break;
   case SQL_FETCH_LAST:
-    cur_row = max_row - ard->array_size;
+    cur_row = max_row - (long)ard->array_size;
     break;
   case SQL_FETCH_ABSOLUTE:
     if (irow < 0)
@@ -814,14 +817,14 @@ long STMT::compute_cur_row(unsigned fFetchType, SQLLEN irow)
         cur_row = 0;     /* Return from beginning */
       }
       else
-        cur_row = max_row + irow;     /* Ok if max_row <= -irow */
+        cur_row = max_row + (long)irow;     /* Ok if max_row <= -irow */
     }
     else
       cur_row = (long)irow - 1;
     break;
 
   case SQL_FETCH_RELATIVE:
-    cur_row = current_row + irow;
+    cur_row = current_row + (long)irow;
     if (current_row > 0 && cur_row < 0 &&
       (long)-irow <= (long)ard->array_size)
     {
@@ -831,8 +834,8 @@ long STMT::compute_cur_row(unsigned fFetchType, SQLLEN irow)
 
   case SQL_FETCH_BOOKMARK:
   {
-    cur_row = irow;
-    if (cur_row < 0 && (long)-irow <= (long)ard->array_size)
+    cur_row = (long)irow;
+    if (cur_row < 0 && (-(long)irow) <= (long)ard->array_size)
     {
       cur_row = 0;
     }
@@ -885,14 +888,14 @@ long STMT::compute_cur_row(unsigned fFetchType, SQLLEN irow)
     else
       data_seek(this, cur_row);
   }
-  current_row = cur_row;
+  current_row = (long)cur_row;
   return current_row;
 
 }
 
 int STMT::ssps_bind_result()
 {
-  const unsigned int num_fields = field_count();
+  const size_t num_fields = field_count();
   unsigned int        i;
 
   if (num_fields == 0)
@@ -912,8 +915,7 @@ int STMT::ssps_bind_result()
     /*TODO care about memory allocation errors */
     result_bind=  (MYSQL_BIND*)myodbc_malloc(sizeof(MYSQL_BIND)*num_fields,
                                              MYF(MY_ZEROFILL));
-    array=        (MYSQL_ROW)myodbc_malloc(sizeof(char*)*num_fields,
-                                             MYF(MY_ZEROFILL));
+    array.set_size(sizeof(char*)*num_fields);
 
     for (i= 0; i < num_fields; ++i)
     {
@@ -956,6 +958,34 @@ int STMT::ssps_bind_result()
   return 0;
 }
 
+bool bind_param(MYSQL_BIND *bind, const char *value, unsigned long length,
+                enum enum_field_types buffer_type);
+
+void STMT::add_query_attr(const char *name, std::string val)
+{
+  query_attr_names.emplace_back(name);
+  query_attr_bind.emplace_back(MYSQL_BIND{});
+  MYSQL_BIND *bind = &query_attr_bind.back();
+  bind_param(bind, val.c_str(), val.length(), MYSQL_TYPE_STRING);
+}
+
+bool STMT::query_attr_exists(const char *name)
+{
+  if (query_attr_names.size() == 0 || name == nullptr)
+    return false;
+
+  size_t len = strlen(name);
+  for (auto c : query_attr_names)
+  {
+    if (c == nullptr)
+      continue;
+      
+    if (strncmp(name, c, len) == 0)
+      return true;
+  }
+  return false;
+}
+
 SQLRETURN STMT::bind_query_attrs(bool use_ssps)
 {
   if (use_ssps)
@@ -967,16 +997,11 @@ SQLRETURN STMT::bind_query_attrs(bool use_ssps)
   }
 
   uint rcount = (uint)apd->rcount();
-  if (rcount == param_count)
+  if (rcount < param_count)
   {
-    // Nothing to do
-    return SQL_SUCCESS;
-  }
-  else if (rcount < param_count)
-  {
-    set_error( MYERR_07001,
+    set_error(MYERR_07001,
               "The number of parameter markers is larger "
-              "than he number of parameters provided",0);
+              "than he number of parameters provided", 0);
     return SQL_ERROR;
   }
   else if (!dbc->has_query_attrs)
@@ -988,7 +1013,7 @@ SQLRETURN STMT::bind_query_attrs(bool use_ssps)
   }
 
   uint num = param_count;
-  query_attr_bind.clear();
+  clear_query_attr_bind();
   query_attr_bind.reserve(rcount - param_count);
   query_attr_names.clear();
   query_attr_names.reserve(rcount - param_count);
@@ -1022,12 +1047,13 @@ SQLRETURN STMT::bind_query_attrs(bool use_ssps)
     ++num;
   }
 
+  telemetry.span_start(this);
+
   MYSQL_BIND *bind = query_attr_bind.data();
   const char** names = (const char**)query_attr_names.data();
 
-  if (mysql_bind_param(dbc->mysql, rcount - param_count,
-                        query_attr_bind.data(),
-                        (const char**)query_attr_names.data()))
+  if (mysql_bind_param(dbc->mysql, (unsigned int)query_attr_bind.size(),
+                        bind, names))
   {
     set_error("HY000");
     return SQL_SUCCESS_WITH_INFO;
@@ -1041,7 +1067,7 @@ SQLRETURN STMT::bind_query_attrs(bool use_ssps)
 */
 BOOL ssps_buffers_need_extending(STMT *stmt)
 {
-  const unsigned int  num_fields = stmt->field_count();
+  const size_t num_fields = stmt->field_count();
   unsigned int i;
 
   for (i= 0; i < num_fields; ++i)
@@ -1143,17 +1169,17 @@ char * ssps_get_string(STMT *stmt, ulong column_number, char *value, ulong *leng
           ssps_get_int64<long long>(stmt, column_number, value, *length));
       }
 
-      *length= strlen(buffer);
+      *length = (ulong)strlen(buffer);
       return buffer;
     }
     case MYSQL_TYPE_FLOAT:
     case MYSQL_TYPE_DOUBLE:
     {
       buffer= ALLOC_IFNULL(buffer, 50);
-      my_f_to_a(buffer, 49, ssps_get_double(stmt, column_number, value,
-                                            *length));
+      myodbc_d2str(ssps_get_double(stmt, column_number, value, *length),
+        buffer, 49);
 
-      *length= strlen(buffer);
+      *length = (ulong)strlen(buffer);
       return buffer;
     }
 

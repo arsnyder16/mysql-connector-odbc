@@ -150,7 +150,6 @@ create_fake_resultset(STMT *stmt, MYSQL_ROW rowval, size_t rowsize,
                       my_ulonglong rowcnt, MYSQL_FIELD *fields, uint fldcnt,
                       bool copy_rowval = true)
 {
-  free_internal_result_buffers(stmt);
   if (stmt->fake_result)
   {
     x_free(stmt->result);
@@ -163,23 +162,19 @@ create_fake_resultset(STMT *stmt, MYSQL_ROW rowval, size_t rowsize,
 
   /* Free if result data was not in row storage */
   if (!stmt->m_row_storage.is_valid())
-    x_free(stmt->result_array);
+    stmt->result_array.reset();
 
   stmt->result= (MYSQL_RES*) myodbc_malloc(sizeof(MYSQL_RES), MYF(MY_ZEROFILL));
-  if (copy_rowval)
-  {
-    stmt->result_array= (MYSQL_ROW)myodbc_memdup((char *)rowval, rowsize, MYF(0));
-  }
-
-  if (!(stmt->result && stmt->result_array))
-  {
-    x_free(stmt->result);
-    x_free(stmt->result_array);
-
+  if (!stmt->result) {
     set_mem_error(stmt->dbc->mysql);
     return handle_connection_error(stmt);
   }
-  stmt->fake_result= 1;
+  stmt->fake_result = 1;
+
+  if (copy_rowval)
+  {
+    stmt->result_array.set(rowval, rowsize);
+  }
 
   set_row_count(stmt, rowcnt);
 
@@ -225,7 +220,6 @@ MYSQL_RES *db_status(STMT *stmt, std::string &db)
 {
   MYSQL *mysql= stmt->dbc->mysql;
   /** the buffer size should count possible escapes */
-  my_bool clause_added= FALSE;
   std::string query;
   char tmpbuff[1024];
   size_t cnt = 0;;
@@ -237,10 +231,9 @@ MYSQL_RES *db_status(STMT *stmt, std::string &db)
   {
     query.append("SCHEMA_NAME LIKE '");
     cnt = myodbc_escape_string(stmt, tmpbuff, sizeof(tmpbuff),
-                              (char *)db.c_str(), db.length(), 1);
+                              (char *)db.c_str(), (ulong)db.length(), 1);
     query.append(tmpbuff, cnt);
     query.append("' ");
-    clause_added= TRUE;
   }
   else
   {
@@ -286,7 +279,6 @@ static MYSQL_RES *table_status_i_s(STMT    *stmt,
 {
   MYSQL *mysql= stmt->dbc->mysql;
   /** the buffer size should count possible escapes */
-  my_bool clause_added= FALSE;
   std::string query;
   char tmpbuff[1024];
   size_t cnt = 0;;
@@ -303,7 +295,6 @@ static MYSQL_RES *table_status_i_s(STMT    *stmt,
                               (char *)db_name, db_len, 1);
     query.append(tmpbuff, cnt);
     query.append("' ");
-    clause_added= TRUE;
   }
   else
   {
@@ -369,110 +360,6 @@ static MYSQL_RES *table_status_i_s(STMT    *stmt,
 
 
 /**
-  Get the table status for a table or tables using Information_Schema DB.
-  Lengths may not be SQL_NTS.
-
-  @param[in] stmt           Handle to statement
-  @param[in] catalog_name   Catalog (database) of table, @c NULL for current
-  @param[in] catalog_len    Length of catalog name
-  @param[in] table_name     Name of table
-  @param[in] table_len      Length of table name
-  @param[in] wildcard       Whether the table name is a wildcard
-
-  @return Result of SHOW TABLE STATUS, or NULL if there is an error
-          or empty result (check mysql_errno(stmt->dbc->mysql) != 0)
-*/
-static MYSQL_RES *table_status_i_s_old(STMT        *stmt,
-                                         SQLCHAR     *catalog_name,
-                                         SQLSMALLINT  catalog_len,
-                                         SQLCHAR     *table_name,
-                                         SQLSMALLINT  table_len,
-                                         my_bool      wildcard,
-                                         my_bool      show_tables,
-                                         my_bool      show_views)
-{
-  MYSQL *mysql= stmt->dbc->mysql;
-  /** the buffer size should count possible escapes */
-  my_bool clause_added= FALSE;
-  std::string query;
-  char tmpbuff[1024];
-  size_t cnt = 0;;
-  query.reserve(1024);
-  query = "SELECT TABLE_NAME,TABLE_COMMENT,TABLE_TYPE,TABLE_SCHEMA " \
-          "FROM (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE ";
-
-  if (catalog_name && *catalog_name)
-  {
-    query.append("TABLE_SCHEMA LIKE '");
-    cnt = myodbc_escape_string(stmt, tmpbuff, sizeof(tmpbuff),
-                              (char *)catalog_name, catalog_len, 1);
-    query.append(tmpbuff, cnt);
-    query.append("' ");
-    clause_added= TRUE;
-  }
-  else
-  {
-    query.append("TABLE_SCHEMA=DATABASE() ");
-  }
-
-  if (show_tables)
-  {
-    query.append("AND ");
-    if (show_views)
-      query.append("( ");
-    query.append("TABLE_TYPE='BASE TABLE' ");
-  }
-
-  if (show_views)
-  {
-    if (show_tables)
-      query.append("OR ");
-    else
-      query.append("AND ");
-
-    query.append("TABLE_TYPE='VIEW' ");
-    if (show_tables)
-      query.append(") ");
-  }
-  query.append(") TABLES ");
-
-  /*
-    As a pattern-value argument, an empty string needs to be treated
-    literally. (It's not the same as NULL, which is the same as '%'.)
-    But it will never match anything, so bail out now.
-  */
-  if (table_name && wildcard && !*table_name)
-    return NULL;
-
-  if (table_name && *table_name)
-  {
-    query.append("WHERE TABLE_NAME LIKE '");
-    if (wildcard)
-    {
-      cnt = mysql_real_escape_string(mysql, tmpbuff, (char *)table_name, table_len);
-      query.append(tmpbuff, cnt);
-    }
-    else
-    {
-      cnt = myodbc_escape_string(stmt, tmpbuff, sizeof(tmpbuff),
-                                (char *)table_name, table_len, 0);
-      query.append(tmpbuff, cnt);
-    }
-    query.append("'");
-  }
-
-  MYLOG_QUERY(stmt, query.c_str());
-
-  if (exec_stmt_query(stmt, query.c_str(), query.length(), FALSE))
-  {
-    return NULL;
-  }
-
-  return mysql_store_result(mysql);
-}
-
-
-/**
   Get the table status for a table or tables. Lengths may not be SQL_NTS.
 
   @param[in] stmt           Handle to statement
@@ -507,7 +394,7 @@ MYSQL_RES *table_status(STMT        *stmt,
 @returns :  1 if required parameter is NULL, 0 otherwise
 */
 int add_name_condition_oa_id(HSTMT hstmt, std::string &query, SQLCHAR * name,
-                              SQLSMALLINT name_len, char * _default)
+                              SQLSMALLINT name_len, const char * _default)
 {
   SQLUINTEGER metadata_id;
 
@@ -554,7 +441,7 @@ are either pattern value(oa) or identifier string(id)
 @returns :  1 if required parameter is NULL, 0 otherwise
 */
 int add_name_condition_pv_id(HSTMT hstmt, std::string &query, SQLCHAR * name,
-                                       SQLSMALLINT name_len, char * _default)
+                                       SQLSMALLINT name_len, const char * _default)
 {
   SQLUINTEGER metadata_id;
   /* this shouldn't be very expensive, so no need to complicate things with additional parameter etc */
@@ -606,10 +493,10 @@ int add_name_condition_pv_id(HSTMT hstmt, std::string &query, SQLCHAR * name,
   return an error if they were.
 */
 #define CHECK_CATALOG_SCHEMA(ST, CN, CL, SN, SL) \
-  if (ST->dbc->ds->no_catalog && CN && *CN && CL) \
+  if (ST->dbc->ds.opt_NO_CATALOG && CN && *CN && CL) \
     return ST->set_error("HY000", "Support for catalogs is disabled by " \
            "NO_CATALOG option, but non-empty catalog is specified.", 0); \
-  if (ST->dbc->ds->no_schema && SN && *SN && SL) \
+  if (ST->dbc->ds.opt_NO_SCHEMA && SN && *SN && SL) \
     return ST->set_error("HY000", "Support for schemas is disabled by " \
            "NO_SCHEMA option, but non-empty schema is specified.", 0); \
   if (CN && *CN && CL && SN && *SN && SL) \
@@ -760,7 +647,7 @@ columns_i_s(SQLHSTMT hstmt, SQLCHAR *catalog, unsigned long catalog_len,
   MYSQL_ROW mysql_row = nullptr;
   // Use statically allocated array of pointers for STMT result processing
   char *mysql_stmt_row[ccount];
-  bool no_ssps = stmt->dbc->ds->no_ssps;
+  bool no_ssps = stmt->dbc->ds.opt_NO_SSPS;
 
   std::string query;
   query.reserve(2048);
@@ -874,7 +761,7 @@ columns_i_s(SQLHSTMT hstmt, SQLCHAR *catalog, unsigned long catalog_len,
       bufs.emplace_back(tempBuf(1024));
       auto &buf = bufs.back();
       buf.buf[0] = 0;
-      lengths[i] = buf.buf_len;
+      lengths[i] = (unsigned long)buf.buf_len;
       do_bind(ssps_res, (SQLCHAR*)buf.buf, MYSQL_TYPE_STRING,
         lengths[i], &is_null[i]);
     }
@@ -915,7 +802,7 @@ columns_i_s(SQLHSTMT hstmt, SQLCHAR *catalog, unsigned long catalog_len,
     return e.retcode;
   }
   if (!stmt->m_row_storage.is_valid())
-    x_free(stmt->result_array);
+    stmt->result_array.reset();
 
   bool is_access = false;
 #ifdef _WIN32
@@ -953,14 +840,14 @@ columns_i_s(SQLHSTMT hstmt, SQLCHAR *catalog, unsigned long catalog_len,
     {
       if (mysql_stmt_fetch(local_stmt))
         return (MYSQL_ROW)nullptr;
-      for (int i = 0; i < ccount; ++i)
+      for (size_t i = 0; i < ccount; ++i)
         mysql_stmt_row[i] = (char*)ssps_res[i].buffer;
       return (MYSQL_ROW)mysql_stmt_row;
     }
     return mysql_fetch_row(mysql_res);
   };
 
-  while(mysql_row = _fetch_row())
+  while((mysql_row = _fetch_row()))
   {
     if (no_ssps)
       result_lengths = mysql_fetch_lengths(mysql_res);
@@ -1074,7 +961,7 @@ columns_i_s(SQLHSTMT hstmt, SQLCHAR *catalog, unsigned long catalog_len,
   }
 
   create_empty_fake_resultset(stmt, SQLCOLUMNS_values,
-                                     sizeof(SQLCOLUMNS_values),
+                                     SQLCOLUMNS_FIELDS,
                                      SQLCOLUMNS_fields,
                                      SQLCOLUMNS_FIELDS);
   return SQL_SUCCESS;
@@ -1195,8 +1082,6 @@ SQLRETURN list_table_priv_i_s(SQLHSTMT    hstmt,
                               SQLSMALLINT table_len)
 {
   STMT *stmt=(STMT *) hstmt;
-  MYSQL *mysql= stmt->dbc->mysql;
-  char   tmpbuff[1024];
   SQLRETURN rc;
   std::string query;
   query.reserve(1024);
@@ -1222,7 +1107,7 @@ SQLRETURN list_table_priv_i_s(SQLHSTMT    hstmt,
   query.append(" ORDER BY TABLE_CAT, TABLE_SCHEM, TABLE_NAME, PRIVILEGE, GRANTEE");
 
   if( !SQL_SUCCEEDED(rc= MySQLPrepare(hstmt, (SQLCHAR *)query.c_str(),
-                          (SQLINTEGER)(query.length()), false, true, false)))
+                          (SQLINTEGER)(query.length()), true, false)))
     return rc;
 
   return my_SQLExecute(stmt);
@@ -1275,9 +1160,7 @@ static SQLRETURN list_column_priv_i_s(HSTMT       hstmt,
                                       SQLSMALLINT column_len)
 {
   STMT *stmt=(STMT *) hstmt;
-  MYSQL *mysql= stmt->dbc->mysql;
   /* 3 names theorethically can have all their characters escaped - thus 6*NAME_LEN  */
-  char   tmpbuff[1024];
   SQLRETURN rc;
   std::string query;
   query.reserve(1024);
@@ -1306,7 +1189,7 @@ static SQLRETURN list_column_priv_i_s(HSTMT       hstmt,
   query.append(" ORDER BY TABLE_CAT, TABLE_SCHEM, TABLE_NAME, COLUMN_NAME, PRIVILEGE");
 
   if( !SQL_SUCCEEDED(rc= MySQLPrepare(hstmt, (SQLCHAR *)query.c_str(), SQL_NTS,
-                                      false, true, false)))
+                                      true, false)))
     return rc;
 
   return my_SQLExecute(stmt);
@@ -1467,7 +1350,7 @@ SQLRETURN foreign_keys_i_s(SQLHSTMT hstmt,
   STMT *stmt=(STMT *) hstmt;
   MYSQL *mysql= stmt->dbc->mysql;
   char tmpbuff[1024]; /* This should be big enough. */
-  char *update_rule, *delete_rule, *ref_constraints_join;
+  const char *update_rule, *delete_rule, *ref_constraints_join;
   SQLRETURN rc;
   std::string query, pk_db, fk_db, order_by;
   query.reserve(4096);
@@ -1551,7 +1434,7 @@ SQLRETURN foreign_keys_i_s(SQLHSTMT hstmt,
     {
       query.append("'");
       cnt = mysql_real_escape_string(mysql, tmpbuff, pk_db.c_str(),
-                                      pk_db.length());
+                                     (unsigned long)pk_db.length());
       query.append(tmpbuff, cnt);
       query.append("' ");
     }
@@ -1578,7 +1461,7 @@ SQLRETURN foreign_keys_i_s(SQLHSTMT hstmt,
     {
       query.append("'");
       cnt = mysql_real_escape_string(mysql, tmpbuff, fk_db.c_str(),
-                                      fk_db.length());
+                                     (unsigned long)fk_db.length());
       query.append(tmpbuff, cnt);
       query.append("' ");
     }
@@ -1599,7 +1482,7 @@ SQLRETURN foreign_keys_i_s(SQLHSTMT hstmt,
 
   query.append(order_by);
   rc= MySQLPrepare(hstmt, (SQLCHAR *)query.c_str(), (SQLINTEGER)(query.length()),
-                   false, true, false);
+                   true, false);
 
   if (!SQL_SUCCEEDED(rc))
     return rc;
@@ -1750,8 +1633,8 @@ MySQLProcedures(SQLHSTMT hstmt,
                  " FROM INFORMATION_SCHEMA.ROUTINES"
                  " WHERE ROUTINE_SCHEMA = DATABASE()");
 
-    rc= MySQLPrepare(hstmt, (SQLCHAR*)query.c_str(), SQL_NTS,
-                     false, true, false);
+  rc= MySQLPrepare(hstmt, (SQLCHAR*)query.c_str(), SQL_NTS,
+                   true, false);
 
   if (!SQL_SUCCEEDED(rc))
     return rc;

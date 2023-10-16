@@ -222,7 +222,7 @@ DECLARE_TEST(t_bug5853)
 
   ok_stmt(hstmt, SQLSetCursorName(hstmt, (SQLCHAR *)"bug5853", SQL_NTS));
 
-  ok_sql(hstmt, "SELECT * FROM t_bug5853");
+  ok_sql(hstmt, "SELECT * FROM t_bug5853 ORDER BY id");
 
   while ((rc= SQLFetchScroll(hstmt, SQL_FETCH_NEXT, 0)) != SQL_NO_DATA_FOUND)
   {
@@ -247,7 +247,7 @@ DECLARE_TEST(t_bug5853)
 
   ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_CLOSE));
 
-  ok_sql(hstmt,"SELECT * FROM t_bug5853");
+  ok_sql(hstmt,"SELECT * FROM t_bug5853 ORDER BY id");
 
   ok_stmt(hstmt, SQLBindCol(hstmt, 2, SQL_C_CHAR, nData, sizeof(nData), &nLen));
 
@@ -3320,8 +3320,8 @@ DECLARE_TEST(t_bug41946)
 DECLARE_TEST(t_sqlputdata)
 {
   SQLRETURN rc;
-  SQLINTEGER  id, resId, i;
-  SQLINTEGER  resData;
+  SQLINTEGER  id, i;
+  SQLLEN resId = 0, resData;
   SQLWCHAR wbuff[MAX_ROW_DATA_LEN+1];
   SQLWCHAR *wcdata= W(L"S\x00e3o Paolo");
 
@@ -3330,7 +3330,6 @@ DECLARE_TEST(t_sqlputdata)
 
   ok_stmt(hstmt, SQLPrepare(hstmt, "INSERT INTO t_sqlputdata VALUES ( ?, ?)", SQL_NTS));
   id= 1;
-  resId = 0;
   resData = SQL_LEN_DATA_AT_EXEC(0);
 
   ok_stmt(hstmt, SQLBindParameter(hstmt, 1, SQL_PARAM_INPUT, SQL_C_SLONG,
@@ -3379,7 +3378,6 @@ DECLARE_TEST(t_sqlputdata)
 */
 DECLARE_TEST(t_18805455)
 {
-  SQLINTEGER  i;
   SQLCHAR     buff[10];
   SQLCHAR     buff1[10];
   SQLLEN      nRowCount;
@@ -3407,6 +3405,7 @@ DECLARE_TEST(t_18805455)
 
   ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_UNBIND));
   ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_CLOSE));
+  ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_RESET_PARAMS));
 
   /* Now fetch and verify the data */
   ok_sql(hstmt, "SELECT * FROM t_18805455");

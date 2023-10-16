@@ -594,6 +594,7 @@ DECLARE_TEST(t_desccol_before_exec)
   is_str(szData, "string 2", 8);
 
   ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_CLOSE));
+  ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_RESET_PARAMS));
   ok_sql(hstmt, "drop table if exists desccol_before_exec");
 
   return OK;
@@ -847,6 +848,7 @@ DECLARE_TEST(t_outparams)
   expect_stmt(hstmt, SQLMoreResults(hstmt), SQL_NO_DATA);
 
   ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_CLOSE));
+  ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_RESET_PARAMS));
 
   ok_sql(hstmt, "DROP PROCEDURE p_outparams");
   return OK;
@@ -970,7 +972,7 @@ DECLARE_TEST(t_varbookmark)
 {
   SQLLEN len= 0;
   SQLCHAR abookmark[20];
-  SQLINTEGER outlen;
+  SQLLEN outlen;
   SQLUSMALLINT rowStatus[11];
   SQLUINTEGER numRowsFetched;
   SQLINTEGER nData[11];

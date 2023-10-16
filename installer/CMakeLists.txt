@@ -37,6 +37,10 @@ ENDIF(DL_INCLUDES)
 
 ADD_EXECUTABLE(myodbc-installer myodbc-installer.cc)
 
+IF(TELEMETRY)
+  TARGET_LINK_LIBRARIES(myodbc-installer otel_api)
+ENDIF()
+
 IF(WIN32)
   IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     LINK_DIRECTORIES(${MYSQL_DIR}/lib/debug)

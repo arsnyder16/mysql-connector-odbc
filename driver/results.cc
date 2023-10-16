@@ -207,7 +207,7 @@ sql_get_bookmark_data(STMT *stmt, SQLSMALLINT fCType, uint column_number,
     {
       int ret;
       SQLCHAR *result_end;
-      ulong copy_bytes;
+      size_t copy_bytes;
       ret= copy_binary_result(stmt, (SQLCHAR *)rgbValue, cbValueMax,
                                 pcbValue, NULL, value, length);
       if (SQL_SUCCEEDED(ret))
@@ -341,7 +341,7 @@ sql_get_bookmark_data(STMT *stmt, SQLSMALLINT fCType, uint column_number,
 char *fix_padding(STMT *stmt, SQLSMALLINT fCType, char *value, std::string &out_str,
               SQLLEN cbValueMax, ulong &data_len, DESCREC *irrec)
 {
-    if (stmt->dbc->ds->pad_char_to_full_length &&
+    if (stmt->dbc->ds.opt_PAD_SPACE &&
          (irrec->type == SQL_CHAR || irrec->type == SQL_WCHAR) &&
          (fCType == SQL_C_CHAR || fCType == SQL_C_WCHAR || fCType == SQL_C_BINARY)
        )
@@ -350,7 +350,7 @@ char *fix_padding(STMT *stmt, SQLSMALLINT fCType, char *value, std::string &out_
         out_str = std::string(value, data_len);
 
       /* Calculate new data length with spaces */
-      data_len = irrec->octet_length < cbValueMax ? irrec->octet_length : cbValueMax;
+      data_len = (ulong)(irrec->octet_length < cbValueMax ? irrec->octet_length : cbValueMax);
 
       out_str.resize(data_len, ' ');
       return (char*)out_str.c_str();
@@ -498,7 +498,7 @@ sql_get_data(STMT *stmt, SQLSMALLINT fCType, uint column_number,
         !field->decimals)
       {
         return copy_binhex_result(stmt, (SQLCHAR *)rgbValue,
-          cbValueMax, pcbValue, value, length);
+          (SQLINTEGER)cbValueMax, pcbValue, value, length);
       }
       /* fall through */
 
@@ -668,7 +668,7 @@ sql_get_data(STMT *stmt, SQLSMALLINT fCType, uint column_number,
         }
 
         if (!str_to_date((SQL_DATE_STRUCT *)rgbValue, tmp, length,
-                          stmt->dbc->ds->zero_date_to_min))
+                          stmt->dbc->ds.opt_ZERO_DATE_TO_MIN))
         {
           *pcbValue= sizeof(SQL_DATE_STRUCT);
         }
@@ -731,7 +731,7 @@ sql_get_data(STMT *stmt, SQLSMALLINT fCType, uint column_number,
         SQL_TIMESTAMP_STRUCT ts;
 
         switch (str_to_ts(&ts, get_string(stmt, column_number, value, &length,
-                          as_string), SQL_NTS, stmt->dbc->ds->zero_date_to_min,
+                          as_string), SQL_NTS, stmt->dbc->ds.opt_ZERO_DATE_TO_MIN,
                           TRUE))
         {
         case SQLTS_BAD_DATE:
@@ -856,7 +856,7 @@ sql_get_data(STMT *stmt, SQLSMALLINT fCType, uint column_number,
       else
       {
         switch (str_to_ts((SQL_TIMESTAMP_STRUCT *)rgbValue, tmp, SQL_NTS,
-                      stmt->dbc->ds->zero_date_to_min, TRUE))
+                      stmt->dbc->ds.opt_ZERO_DATE_TO_MIN, TRUE))
         {
         case SQLTS_BAD_DATE:
           return stmt->set_error("22018", "Data value is not a valid date/time(stamp) value", 0);
@@ -907,14 +907,13 @@ sql_get_data(STMT *stmt, SQLSMALLINT fCType, uint column_number,
             /* Lazy way - converting number we have to a string.
                If it couldn't happen we have to scale/unscale number - we would
                just reverse binary data */
-            char _value[21]; /* max string length of 64bit number */
+            std::string _value;
             if (numeric_value)
-              sprintf(_value, "%ll", numeric_value);
+              _value = std::to_string(numeric_value);
             else
-              sprintf(_value, "%llu", u_numeric_value);
+              _value = std::to_string(u_numeric_value);
 
-
-            sqlnum_from_str(_value, sqlnum, &overflow);
+            sqlnum_from_str(_value.c_str(), sqlnum, &overflow);
             *pcbValue = sizeof(ulonglong);
           }
 
@@ -1115,7 +1114,7 @@ MySQLDescribeCol(SQLHSTMT hstmt, SQLUSMALLINT column,
   if (nullable)
     *nullable= irrec->nullable;
 
-  if (stmt->dbc->ds->return_table_names_for_SqlDescribeCol && irrec->table_name)
+  if (stmt->dbc->ds.opt_FULL_COLUMN_NAMES && irrec->table_name)
   {
     char *tmp= (char*)myodbc_malloc(strlen((char *)irrec->name) +
                          strlen((char *)irrec->table_name) + 2,
@@ -1371,7 +1370,7 @@ SQLRETURN SQL_API SQLBindCol(SQLHSTMT      StatementHandle,
       stmt->ard->records2.pop_back(); // Remove the last
       while (stmt->ard->rcount())
       {
-        arrec= desc_get_rec(stmt->ard, stmt->ard->rcount() - 1, FALSE);
+        arrec= desc_get_rec(stmt->ard, (int)stmt->ard->rcount() - 1, FALSE);
         if (ARD_IS_BOUND(arrec))
           break;
         else
@@ -1407,7 +1406,7 @@ SQLRETURN SQL_API SQLBindCol(SQLHSTMT      StatementHandle,
   if ((rc= stmt_SQLSetDescField(stmt, stmt->ard, ColumnNumber,
                                 SQL_DESC_OCTET_LENGTH,
                                 (SQLPOINTER)(size_t)bind_length(TargetType,
-                                                         BufferLength),
+                                                         (ulong)BufferLength),
                                 SQL_IS_LEN)) != SQL_SUCCESS)
     return rc;
   if ((rc= stmt_SQLSetDescField(stmt, stmt->ard, ColumnNumber,
@@ -1535,22 +1534,21 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT      StatementHandle,
 
     if ((sColNum == -1 && stmt->stmt_options.bookmarks == SQL_UB_VARIABLE))
     {
-      char _value[21];
+      std::string _value;
       /* save position set using SQLSetPos in buffer */
-      int _len= sprintf(_value, "%ld", (stmt->cursor_row > 0) ?
-                                    stmt->cursor_row : 0);
-
+      _value = std::to_string((stmt->cursor_row > 0) ? stmt->cursor_row : 0);
       arrec= desc_get_rec(stmt->ard, sColNum, FALSE);
       result= sql_get_bookmark_data(stmt, TargetType, sColNum,
                                     TargetValuePtr, BufferLength, StrLen_or_IndPtr,
-                                    _value, _len, arrec);
+                                    (char*)_value.data(),
+                                    (ulong)_value.length(), arrec);
     }
     else
     {
       /* catalog functions with "fake" results won't have lengths */
       length= irrec->row.datalen;
       if (!length && stmt->current_values[sColNum])
-        length= strlen(stmt->current_values[sColNum]);
+        length = (ulong)strlen(stmt->current_values[sColNum]);
 
       arrec= desc_get_rec(stmt->ard, sColNum, FALSE);
 
@@ -1766,8 +1764,6 @@ fill_fetch_bookmark_buffers(STMT *stmt, ulong value, uint rownum)
 {
   SQLRETURN res= SQL_SUCCESS, tmp_res;
   DESCREC *arrec;
-  ulong length= 0;
-  char _value[21];
 
   IS_BOOKMARK_VARIABLE(stmt);
   arrec= desc_get_rec(stmt->ard, -1, FALSE);
@@ -1785,7 +1781,7 @@ fill_fetch_bookmark_buffers(STMT *stmt, ulong value, uint rownum)
       TargetValuePtr= ptr_offset_adjust(arrec->data_ptr,
                                         stmt->ard->bind_offset_ptr,
                                         stmt->ard->bind_type,
-                                        arrec->octet_length, rownum);
+                                        (SQLINTEGER)arrec->octet_length, rownum);
     }
 
     if (arrec->octet_length_ptr)
@@ -1796,10 +1792,10 @@ fill_fetch_bookmark_buffers(STMT *stmt, ulong value, uint rownum)
                                     sizeof(SQLLEN), rownum);
     }
 
-    length= sprintf(_value, "%ld", (value > 0) ? value : 0);
+    std::string _value = std::to_string((value > 0) ? value : 0);
     tmp_res= sql_get_bookmark_data(stmt, arrec->concise_type, (uint)0,
                           TargetValuePtr, arrec->octet_length, pcbValue,
-                          _value, length, arrec);
+                          (char*)_value.data(), (ulong)_value.length(), arrec);
     if (tmp_res != SQL_SUCCESS)
     {
       if (tmp_res == SQL_SUCCESS_WITH_INFO)
@@ -1851,7 +1847,7 @@ fill_fetch_buffers(STMT *stmt, MYSQL_ROW values, uint rownum)
         TargetValuePtr= ptr_offset_adjust(arrec->data_ptr,
                                           stmt->ard->bind_offset_ptr,
                                           stmt->ard->bind_type,
-                                          arrec->octet_length, rownum);
+                                          (SQLINTEGER)arrec->octet_length, rownum);
       }
 
       /* catalog functions with "fake" results won't have lengths */
@@ -1859,7 +1855,7 @@ fill_fetch_buffers(STMT *stmt, MYSQL_ROW values, uint rownum)
 
       if (!length && *values)
       {
-        length= strlen(*values);
+        length = (ulong)strlen(*values);
       }
 
       /* We need to pass that pointer to the sql_get_data so it could detect
@@ -1954,7 +1950,7 @@ SQLRETURN SQL_API myodbc_single_fetch( SQLHSTMT             hstmt,
         cur_row= 0L;
         break;
       case SQL_FETCH_LAST:
-        cur_row= max_row - stmt->ard->array_size;
+        cur_row = max_row - (long)stmt->ard->array_size;
         break;
       case SQL_FETCH_ABSOLUTE:
         if (irow < 0)
@@ -1969,14 +1965,14 @@ SQLRETURN SQL_API myodbc_single_fetch( SQLHSTMT             hstmt,
             cur_row= 0;     /* Return from beginning */
           }
           else
-            cur_row= max_row + irow;     /* Ok if max_row <= -irow */
+            cur_row = max_row + (long)irow;     /* Ok if max_row <= -irow */
         }
         else
           cur_row= (long) irow - 1;
         break;
 
       case SQL_FETCH_RELATIVE:
-        cur_row= stmt->current_row + irow;
+        cur_row = stmt->current_row + (long)irow;
         if (stmt->current_row > 0 && cur_row < 0 &&
            (long) - irow <= (long)stmt->ard->array_size)
         {
@@ -1994,7 +1990,7 @@ SQLRETURN SQL_API myodbc_single_fetch( SQLHSTMT             hstmt,
 
             if (arrec->concise_type == SQL_C_BOOKMARK)
             {
-              brow= *((SQLLEN *) stmt->stmt_options.bookmark_ptr);
+              brow = (long)(*((SQLLEN *) stmt->stmt_options.bookmark_ptr));
             }
             else
             {
@@ -2002,7 +1998,7 @@ SQLRETURN SQL_API myodbc_single_fetch( SQLHSTMT             hstmt,
             }
           }
 
-          cur_row= brow + irow;
+          cur_row = brow + (long)irow;
           if (cur_row < 0 && (long)-irow <= (long)stmt->ard->array_size)
           {
             cur_row= 0;
@@ -2280,7 +2276,7 @@ SQLRETURN SQL_API my_SQLExtendedFetch( SQLHSTMT             hstmt,
 
     if ( stmt->stmt_options.cursor_type == SQL_CURSOR_FORWARD_ONLY )
     {
-      if ( fFetchType != SQL_FETCH_NEXT && !stmt->dbc->ds->safe )
+      if ( fFetchType != SQL_FETCH_NEXT && !stmt->dbc->ds.opt_SAFE )
         return  stmt->set_error(MYERR_S1106,
                           "Wrong fetchtype with FORWARD ONLY cursor", 0);
     }
@@ -2418,9 +2414,9 @@ SQLRETURN SQL_API my_SQLExtendedFetch( SQLHSTMT             hstmt,
       if (fFetchType == SQL_FETCH_BOOKMARK &&
            stmt->stmt_options.bookmarks == SQL_UB_VARIABLE)
       {
-        row_book= fill_fetch_bookmark_buffers(stmt, irow + i + 1, i);
+        row_book= fill_fetch_bookmark_buffers(stmt, (ulong)(irow + i + 1), (uint)i);
       }
-      row_res= fill_fetch_buffers(stmt, values, i);
+      row_res= fill_fetch_buffers(stmt, values, (uint)i);
 
       /* For SQL_SUCCESS we need all rows to be SQL_SUCCESS */
       if (res != row_res || res != row_book)
@@ -2460,7 +2456,7 @@ SQLRETURN SQL_API my_SQLExtendedFetch( SQLHSTMT             hstmt,
       ++cur_row;
     }   /* fetching cycle end*/
 
-    stmt->rows_found_in_set= i;
+    stmt->rows_found_in_set = (uint)i;
     *pcrow= i;
 
     disconnected= is_connection_lost(mysql_errno(stmt->dbc->mysql))

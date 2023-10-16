@@ -1,4 +1,4 @@
-// Copyright (c) 2007, 2022, Oracle and/or its affiliates. All rights reserved.
+// Copyright (c) 2007, 2023, Oracle and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License, version 2.0, as
@@ -139,7 +139,7 @@ const char * wstr4output(const wchar_t *wstr)
 #define _MY_NEWLINE "\n"
 #endif
 
-SQLCHAR *mydriver= (SQLCHAR *)"{MySQL ODBC 8.0 Driver}";
+SQLCHAR *mydriver= (SQLCHAR *)"{MySQL ODBC 8.1 Driver}";
 SQLCHAR *mydsn= (SQLCHAR *)"test";
 SQLCHAR *myuid= (SQLCHAR *)"root";
 SQLCHAR *mypwd= (SQLCHAR *)"";
@@ -579,7 +579,7 @@ do { \
 #define is_str(a, b, c) \
 do { \
   char *val_a= (char *)(a), *val_b= (char *)(b); \
-  int val_len= (int)(c) == SQL_NTS ? strlen(val_a) : (int)(c); \
+  int val_len= (int)(c) == SQL_NTS ? (int)strlen(val_a) : (int)(c); \
   if (strncmp(val_a, val_b, val_len) != 0) { \
     printf("# %s ('%*s') != '%*s' in %s on line %d\n", \
            #a, val_len, val_a, val_len, val_b, __FILE__, __LINE__); \
@@ -615,7 +615,7 @@ do { \
 */
 #define is_num(a, b) \
 do { \
-  long long a1= (a), a2= (b); \
+  long long a1= (long long)(a), a2= (long long)(b); \
   if (a1 != a2) { \
     printf("# %s (%lld) != %lld in %s on line %d\n", \
            #a, a1, a2, __FILE__, __LINE__); \

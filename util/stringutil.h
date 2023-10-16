@@ -114,8 +114,8 @@ copy_and_convert(char *to, uint32 to_length, CHARSET_INFO *to_cs,
 int sqlwcharcasecmp(const SQLWCHAR *s1, const SQLWCHAR *s2);
 const SQLWCHAR *sqlwcharchr(const SQLWCHAR *wstr, SQLWCHAR wchr);
 size_t sqlwcharlen(const SQLWCHAR *wstr);
-SQLWCHAR *sqlwchardup(const SQLWCHAR *wstr, size_t charlen);
-unsigned long sqlwchartoul(const SQLWCHAR *wstr, const SQLWCHAR **endptr);
+SQLWCHAR *sqlwchardup(const SQLWCHAR *wstr, SQLINTEGER charlen);
+unsigned long sqlwchartoul(const SQLWCHAR *wstr);
 void sqlwcharfromul(SQLWCHAR *wstr, unsigned long v);
 size_t sqlwcharncat2(SQLWCHAR *dest, const SQLWCHAR *src, size_t *n);
 SQLWCHAR *sqlwcharncpy(SQLWCHAR *dest, const SQLWCHAR *src, size_t n);
@@ -125,7 +125,8 @@ char * myodbc_strlwr(char *target, size_t len);
 SQLCHAR* sqlwchar_as_utf8_simple(SQLWCHAR *s);
 char *myodbc_stpmov(char *dst, const char *src);
 char *myodbc_ll2str(longlong val, char *dst, int radix);
-
+char *myodbc_d2str(double val, char *buf, size_t buf_size,
+                   bool max_precision = true);
 typedef int(*qsort_cmp)(const void *, const void *);
 
 void myodbc_qsort(void *base_ptr, size_t count, size_t size, qsort_cmp cmp);
@@ -145,7 +146,7 @@ double myodbc_strtod(const char *str, int len);
 #endif
 
 typedef std::basic_string<SQLWCHAR, std::char_traits<SQLWCHAR>, std::allocator<SQLWCHAR>> SQLWSTRING;
-SQLWSTRING escape_brackets(const SQLWCHAR* val, bool add_start_end);
+SQLWSTRING escape_brackets(const SQLWSTRING &val, bool add_start_end);
 
 #endif /* _STRINGUTIL_H */
 

@@ -118,7 +118,7 @@ DECLARE_TEST(t_blob)
     {
         rc = SQLGetData(hstmt, 2, SQL_C_BINARY, blobbuf, blobbuf_size, &cbValue);
         myassert(cbValue > 0);
-        blob_read += (cbValue < blobbuf_size ? cbValue : blobbuf_size);
+        blob_read += (SQLINTEGER)(cbValue < blobbuf_size ? cbValue : blobbuf_size);
     } while (rc == SQL_SUCCESS_WITH_INFO);
     myassert(rc == SQL_SUCCESS);
     myassert(blob_read == blob_size);
@@ -158,9 +158,9 @@ DECLARE_TEST(t_1piecewrite2)
     }
     blobbuf[i] = '\0';
     l = 1;
-    rc = SQLBindParameter(hstmt,SQL_PARAM_INPUT,1, SQL_C_LONG, SQL_INTEGER, 0, 0, &l,0, NULL);
+    rc = SQLBindParameter(hstmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &l, 0, NULL);
     mystmt(hstmt,rc);
-    rc = SQLBindParameter(hstmt,SQL_PARAM_INPUT, 2, SQL_C_CHAR, SQL_LONGVARCHAR, 0, 0, blobbuf,cbValue, NULL);
+    rc = SQLBindParameter(hstmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_LONGVARCHAR, 0, 0, blobbuf,cbValue, NULL);
     mystmt(hstmt,rc);
     ok_sql(hstmt, "INSERT INTO TBLOB VALUES (1,?)");
     mystmt(hstmt,rc);
@@ -490,6 +490,7 @@ DECLARE_TEST(t_putdata3)
 
   ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_UNBIND));
   ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_CLOSE));
+  ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_RESET_PARAMS));
 
   if (mysql_min_version(hdbc, "4.0", 3))
   {
@@ -884,6 +885,7 @@ DECLARE_TEST(t_bug_29282638)
   SQLFetch(hstmt);
 
   ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_CLOSE));
+  ok_stmt(hstmt, SQLFreeStmt(hstmt, SQL_RESET_PARAMS));
   ok_sql(hstmt, "DROP TABLE if exists bug_29282638");
 
   return OK;
